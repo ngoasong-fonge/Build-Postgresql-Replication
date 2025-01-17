@@ -1,0 +1,17 @@
+# Stop the PostgreSQL service
+sudo systemctl stop postgresql-15
+
+# Remove the PostgreSQL server package
+sudo dnf remove -y postgresql15-server
+
+# Optionally, remove the PostgreSQL data directory
+sudo rm -rf /opt/app/postgres-data
+
+# Optionally, remove the PostgreSQL client and utilities
+sudo dnf remove -y postgresql15
+
+# Clean up unused dependencies
+sudo dnf autoremove
+
+
+sudo dnf remove -y repmgr15*
