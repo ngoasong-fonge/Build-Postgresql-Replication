@@ -1,0 +1,38 @@
+1. Check Replication Status
+SELECT * FROM pg_stat_replication;
+2. Promote Standby to Primary: On the standby server, promote it to primary using the pg_ctl command.
+
+pg_ctl promote -D /path/to/standby/data_directory
+ pg_ctl promote -D /opt/app/postgres-data
+
+3. Reconfigure Old Primary as Standby:
+ Stop the Old Primary Server:
+sudo systemctl stop postgresql-15
+
+4. Remove Recovery Configuration (if any): Remove or rename any old recovery.conf present.
+rm /path/to/primary/data_directory/recovery.conf
+
+5. Create Recovery Configuration: Create a standby.signal  file on the old primary server to configure it as a standby.
+
+touch /opt/app/postgres-data/standby.signal 
+-Update bellow PostgreSQL configuration to start as a standby
+ vi /opt/app/postgres-data/postgresql.conf
+hot_standby = on
+primary_conninfo = 'host= uv1medpg3db1.medimpact.com port=5432 user=replicator password=kEAtWd4aq '
+restore_command = ' rsync -a svcpostgres@uv1medpg3db1:/opt/backup/archive/%f %p'  
+
+6. Uncomment bellow parameters on old primary:
+wal_level = replica        
+max_wal_senders = 3
+archive_mode = on
+archive_command = 'cp %p /opt/backup/archive/%f'
+
+7. Comment bellow parameters on current primary :
+wal_level = replica        
+max_wal_senders = 3
+archive_mode = on
+archive_command = 'cp %p /opt/backup/archive/%f'
+
+6. Start the Old Primary as Standby:
+sudo systemctl start postgresql-15
+SELECT inet_server_addr() AS hostname;

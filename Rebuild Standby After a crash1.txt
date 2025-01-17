@@ -1,0 +1,35 @@
+                                              Rebuild Replication If broken
+
+1 /  Connect to standby server and safely copy postgresql.conf and pg_hba.conf to a safe/different location :
+cp  /opt/app/postgres-data/postgresql.conf  /tmp
+cp /opt/app/postgres-data/pg_hba.conf  /tmp
+2/ Delete the content of the data directory including pg_wal if in a dirrent location
+rm -rf /opt/app/postgres-data/*
+rm -rf /opt/app/pg_wal/*
+3/ Start the basebackup from standby server
+  pg_basebackup -h 10.13.102.119 -D /opt/app/postgres-data -P -U replicator --wal-method=stream
+4/ Rename the wal directory, recreate the symlink and move the wal files created by pg_basebackup to the symlink mount point:
+mv pg_wal pg_wal.old
+ln -s /opt/app/pg_wal/ pg_wal
+ mv pg_wal.old/* /opt/app/pg_wal/
+rm -rf pg_wal.old
+5/ Rename current postgresql.conf and pg_hba.conf in data directory to old and copy or move the postgresql.conf and pg_hba.conf you safed in /tmp directory to the data directory 
+ cd /opt/app/postgres-data
+mv postgresql.conf postgresql.conf.old
+mv pg_hba.conf pg_hba.conf.old
+mv /tmp/postgresql.conf /opt/app/postgres-data/
+mv /tmp/pg_hba.conf /opt/app/postgres-data/
+
+6/ Create a standby signal file to initiate recovery mode:
+touch /opt/app/postgres-data/standby.signal
+
+
+7/ Start PostgreSQL on the standby server:
+sudo systemctl start postgresql-15
+
+8/ Verify Replication
+On the primary server, check the replication status:
+ psql -c "SELECT * FROM pg_stat_replication;"
+9/ On the standby server, verify it is in recovery mode:
+psql -c "SELECT pg_is_in_recovery();"
+

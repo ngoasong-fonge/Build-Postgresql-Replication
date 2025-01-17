@@ -1,0 +1,148 @@
+Step 1: Update the System to ensure your system packages are up to date, which helps in avoiding compatibility issues.
+sudo dnf update -y
+ 
+
+Step 2: Install PostgreSQL 15
+-Add PostgreSQL repository: Add the PGDG repository, which contains the PostgreSQL packages
+sudo dnf install -y https://download.postgresql.org/pub/repos/yum/reporpms/EL-8-x86_64/pgdg-redhat-repo-latest.noarch.rpm
+ 
+-Disable the default PostgreSQL module: Disable the default PostgreSQL module to avoid conflicts and ensure that the installation comes from the PGDG repository
+sudo dnf -qy module disable postgresql
+-Install PostgreSQL 15: Install the PostgreSQL 15 server package from the PGDG repository.
+sudo dnf install -y postgresql15-server
+ 
+
+Step 3: Create Mount Points for /pgdata and /pg_wal
+Create directories: Prepare directories for PostgreSQL data and WAL logs (make sure postgres user owns both directories)
+sudo mkdir -p /opt/app/postgres-data
+sudo mkdir -p /opt/app/pg_wal
+ 
+
+Step 4: Initialize PostgreSQL Cluster with Custom or specified data and WAL Directories, run bellow command as postgres user
+/usr/pgsql-15/bin/initdb -D /opt/app/postgres-data --waldir=/opt/app/pg_wal
+ 
+
+Step 5: Configure PostgreSQL for Primary and Standby
+-Edit /postgres-data/postgresql.conf on the primary server:
+sudo vi /opt/pgdata/postgresql.conf
+-Set the following parameters:
+
+listen_addresses = '*'
+wal_level = replica        
+max_wal_senders = 3
+archive_mode = on
+archive_command = 'cp %p /opt/backup/archive/%f'
+
+-Edit /opt/postgres-data/pg_hba.conf to allow replication:
+sudo vi /opt/postgres-data/pg_hba.conf
+Add the following lines:
+
+# Allow replication connections from the standby server
+host    replication     replicator     <standby_IP>/32          md5
+host    replication     replicator     10.15.135.119/32          md5
+
+# Allow local connections
+local   all             all                                     peer
+host    all             all             127.0.0.1/32            md5
+host    all             all             ::1/128                 md5
+
+host replication replicator <standby_ip>/32 md5: 
+This line allows the replicator user from the standby server to connect to the primary server for replication purposes.
+
+local all all peer: This line allows all users to connect to the database using peer authentication for local connections.
+
+host all all 127.0.0.1/32 md5: 
+This line allows all users to connect to the database using MD5 authentication for connections from localhost (IPv4).
+
+host all all ::1/128 md5: 
+This line allows all users to connect to the database using MD5 authentication for connections from localhost (IPv6).
+host: This specifies that the connection type is a TCP/IP connection.
+
+replication: This specifies the database that the rule applies to. 
+The keyword replication is a special database name that matches connections made for streaming replication and the pg_basebackup utility.
+
+replicator: This specifies the database role (user) that the rule applies to. 
+In this case, it is the replicator user, which is a role created specifically for replication purposes.
+
+md5: This specifies the authentication method to be used. 
+md5 means that MD5-encrypted passwords are required for authentication.
+
+When starting postgres service, postgres will be looking for the PostgreSQL data directory at the default location /var/lib/pgsql/15/data/, which is missing or empty. Since we have initialized the data directory at /opt/app/postgres-data, we need to update the service configuration to use this directory instead.
+-Edit the PostgreSQL service file:
+ Sudo vi /usr/lib/systemd/system/postgresql-15.service
+-Update the Environment line to point to your data directory change to bellow:
+Environment=PGDATA=/opt/app/postgres-data
+ 
+-Start and enable PostgreSQL:
+sudo systemctl start postgresql-15
+-Enable the postgresql service to start on boot
+sudo systemctl enable postgresql-15
+ 
+
+-Create a replication user:
+sudo -u postgres psql
+CREATE ROLE replicator REPLICATION LOGIN ENCRYPTED PASSWORD ' kEAtWd4aq';
+\q
+
+Step 6: Set Up Standby Server
+Ensure the standby server has the same PostgreSQL 15 installed (same step/commad)
+
+-Stop PostgreSQL on the standby server:
+sudo systemctl stop postgresql-15
+
+-Copy data from the primary to the standby:
+ rm -rf /opt/app/postgres-data/*
+ rm -rf /opt/app/pg_wal/*
+Run bellow command on standby , the IP in the command is primary IP: 
+ pg_basebackup -h 10.13.102.119 -D /opt/app/postgres-data -P -U replicator --wal-method=stream 
+Step 7: Configure PostgreSQL to Use the pg_wal Directory
+-Rename the wal directory, recreate the symlink and move the wal files created by pg_basebackup to the symlink mount point:
+cd /opt/app/postgres-data/
+mv pg_wal pg_wal.old
+ln -s /opt/app/pg_wal/ pg_wal
+ mv pg_wal.old/* /opt/app/pg_wal/
+rm -rf pg_wal.old
+
+-Update bellow PostgreSQL configuration to start as a standby
+ vi /opt/app/postgres-data/postgresql.conf
+hot_standby = on
+primary_conninfo = 'host= uv1medpg3db1.medimpact.com port=5432 user=replicator password= kEAtWd4aq '
+restore_command = ' rsync -a postgres@uv1medpg3db1:/opt/backup/archive/%f %p'  
+
+In PostgreSQL 12 and later, the recovery.conf and standby_mode is deprecated and replaced by using a standby.signal file. 
+
+- Create a standby signal file to initiate recovery mode:
+touch /opt/app/postgres-data/standby.signal
+
+
+Step 8: Configure pg_hba.conf on the Standby Server
+- vi /pgdata/pg_hba.conf
+Add the following lines to allow replication connections from the primary and local connections:
+
+# Allow replication connections from the primary server
+host    replication     replicator     <primary_ip>/32           md5
+host    replication     replicator     10.13.102.119/32           md5
+
+# Allow local connections
+local   all             all                                     peer
+host    all             all             127.0.0.1/32            md5
+host    all             all             ::1/128                 md5
+
+
+-Start and enable PostgreSQL on the standby server:
+sudo systemctl start postgresql-15
+sudo systemctl enable postgresql-15
+
+Step 9: Verify Replication
+-On the primary server, check the replication status:
+ psql -c "SELECT * FROM pg_stat_replication;"
+ 
+
+-On the standby server, verify it is in recovery mode:
+psql -c "SELECT pg_is_in_recovery();"
+ 
+
+If everything is set up correctly, the standby server should be in recovery mode and receiving WAL logs from the primary server.
+
+
+

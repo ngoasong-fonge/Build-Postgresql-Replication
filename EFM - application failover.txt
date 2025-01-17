@@ -1,0 +1,175 @@
+Yes, you can configure EnterpriseDB Failover Manager (EFM) to use a CNAME that points to the primary database and update the DNS to point to the standby after a switchover or failover. This method avoids using PgBouncer and leverages DNS updates to ensure that client applications connect to the correct primary node.
+Here’s a step-by-step guide on how to achieve this:
+Steps to Configure EFM with CNAME and Update DNS
+
+1.	Set Up Initial DNS Configuration
+2.	Configure EFM for Failover
+3.	Create a Failover Script to Update DNS
+4.	Integrate the Failover Script with EFM
+5.	Client Application Configuration
+1. Set Up Initial DNS Configuration
+1.	Create a CNAME Record:
+	Create a CNAME record in your DNS that points to the current primary database node.
+Example:
+•	db.example.com -> primary-db.example.com
+2.	Initial DNS Setup:
+	Ensure primary-db.example.com points to the IP address of the primary node.
+	Ensure standby-db.example.com points to the IP address of the standby node.
+2. Configure EFM for Failover
+1.	Install and Configure EFM:
+	Follow the EFM installation and configuration steps on both primary and standby nodes.
+Example efm.properties Configuration:
+
+db.user=efm
+db.password=efm_password
+db.port=5432
+db.serviceOwner=postgres
+db.reuseConnection=true
+
+# Define the cluster members
+node1.host=primary-db.example.com
+node2.host=standby-db.example.com
+
+# Script to run on failover
+failoverScript=/path/to/update_dns_failover.sh
+
+3. Create a Failover Script to Update DNS
+Create a script that will update the CNAME to point to the new primary node upon failover.
+Example Failover Script (update_dns_failover.sh):
+
+
+#!/bin/bash
+
+NEW_PRIMARY_IP=$1
+DNS_SERVER="your_dns_server_ip"
+ZONE="example.com"
+RECORD="db.example.com"
+TTL=60
+
+# Update DNS record using nsupdate
+nsupdate << EOF
+server $DNS_SERVER
+zone $ZONE
+update delete $RECORD CNAME
+update add $RECORD $TTL CNAME primary-db.example.com
+send
+EOF
+
+
+Note: Replace primary-db.example.com with the appropriate hostname or IP address. Adjust the script according to your DNS server and tools.
+4. Integrate the Failover Script with EFM
+Add the failover script path to the EFM configuration file (efm.properties):
+
+failoverScript=/path/to/update_dns_failover.sh
+
+5. Client Application Configuration
+Configure your client applications to connect to the CNAME (db.example.com). This ensures that clients always connect to the primary node, as defined by the CNAME record.
+
+
+jdbc:postgresql://db.example.com:5432/mydatabase
+
+
+
+
+
+
+
+
+
+
+
+
+
+1. Check Replication Status
+
+SELECT * FROM pg_stat_replication;
+
+2. Promote Standby to Primary: On the standby server, promote it to primary using the pg_ctl command.
+
+pg_ctl promote -D /path/to/standby/data_directory
+
+3. Reconfigure Old Primary as Standby:
+
+ Stop the Old Primary Server:
+
+pg_ctl stop -D /path/to/primary/data_directory -m fast
+
+4. Remove Recovery Configuration (if any): Remove or rename any old recovery.conf present.
+
+rm /path/to/primary/data_directory/recovery.conf
+
+5. Create Recovery Configuration: Create a new recovery.conf file on the old primary server to configure it as a standby.
+
+touch /path/to/primary/data_directory/recovery.conf
+
+standby_mode = 'on'
+primary_conninfo = 'host=new_primary_host port=5432 user=replication_user password=replication_password'
+
+6. Start the Old Primary as Standby:
+pg_ctl start -D /path/to/primary/data_directory
+
+
+
+
+
+
+Example Configuration
+Primary Server (Old):
+•	Data Directory: /var/lib/postgresql/12/main
+•	Host: old_primary_host
+Standby Server (New Primary):
+•	Data Directory: /var/lib/postgresql/12/main
+•	Host: new_primary_host
+Primary Conninfo (used in recovery.conf):
+sh
+Copy code
+primary_conninfo = 'host=new_primary_host port=5432 user=replication_user password=replication_password'
+Step-by-Step Commands
+1. Promote the Standby Server:
+sh
+Copy code
+# On the standby server
+pg_ctl promote -D /var/lib/postgresql/12/main
+2. Stop the Old Primary Server:
+sh
+Copy code
+# On the old primary server
+pg_ctl stop -D /var/lib/postgresql/12/main -m fast
+3. Reconfigure the Old Primary as Standby:
+sh
+Copy code
+# On the old primary server
+rm /var/lib/postgresql/12/main/recovery.conf
+
+cat <<EOF > /var/lib/postgresql/12/main/recovery.conf
+standby_mode = 'on'
+primary_conninfo = 'host=new_primary_host port=5432 user=replication_user password=replication_password'
+trigger_file = '/var/lib/postgresql/12/main/trigger_file'
+EOF
+4. Start the Old Primary as Standby:
+sh
+Copy code
+# On the old primary server
+pg_ctl start -D /var/lib/postgresql/12/main
+Verification
+On the New Primary:
+Check that the new primary is running and accepting connections:
+sh
+Copy code
+psql -h new_primary_host -U your_user -d your_database -c "SELECT pg_is_in_recovery();"
+On the Old Primary (now Standby):
+Check the replication status to ensure it is now a standby:
+sh
+Copy code
+psql -h old_primary_host -U your_user -d your_database -c "SELECT * FROM pg_stat_wal_receiver;"
+
+
+
+---------------------------------------
+
+
+
+
+
+
+
